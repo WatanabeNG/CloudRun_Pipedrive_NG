@@ -4,6 +4,7 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 from google.cloud import storage
 import json
+import pandas as pd
 
 
 app = FastAPI()
@@ -29,17 +30,23 @@ def auth_gcs():
 
 #Funções exclusivas desse endpoint
 
-def put_file_to_gcs(output_file: str, bucket_name: str, content):
+def put_file_to_gcs(type: str,output_file: str, bucket_name: str, content):
     try:
         storage_client = auth_gcs()
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(output_file)
-        blob.upload_from_string(content)
 
+        if type == "json":
+            blob.upload_from_string(content)
+        else: 
+            blob.upload_from_filename('output.parquet')
         return 'OK'
     except Exception as ex:
         print(ex)
-#def parse_json_raw(data):
+
+def json_to_parquet(data):
+    df = pd.DataFrame(data)
+    df.to_parquet('output.parquet', index=False)
 
 
 # Listagem de Endpoints
@@ -52,14 +59,29 @@ async def webhook(request: Request):
     # Converte os bytes para um objeto JSON
     payload = json.loads(body)
 
-    # Cria um nome de arquivo único
-    filename = f"webhook_pipedrive_{payload['meta']['object']}_{payload['meta']['company_id']}_{payload['meta']['timestamp']}.json"
+    # criar o caminho do arquivo
+    path =  f"pipedrive/webhook/{payload['meta']['host']}/{payload['meta']['object']}/"
+    # Cria um nome de arquivo único em JSON original
+    filename = f"webhook_pipedrive_{payload['meta']['object']}_{payload['meta']['company_id']}_{payload['meta']['timestamp_micro']}.json"
+    # Cria um nome de arquivo único em JSON parquet
+    filename_parquet = f"webhook_pipedrive_{payload['meta']['object']}_{payload['meta']['company_id']}_{payload['meta']['timestamp_micro']}.parquet"
+
     try:
         put_file_to_gcs(
+            type = "json",
             bucket_name="ng-raw",
-            output_file="/pipedrive/" + filename,
+            output_file= path + filename,
             content=json.dumps(payload)
             )
+        # try:
+        #     json_to_parquet(json.dumps(payload)),
+        #     put_file_to_gcs(
+        #         type = 'parquet',
+        #         bucket_name="ng-raw",
+        #         output_file= path + filename_parquet
+        #     )
+        # except Exception as ex:
+        #     print(f"error {ex}")
         return {"Status": "OK", "Bucket_name": "ng_raw"}
     except Exception as ex:
         raise HTTPException(status_code=ex.code, detail=f"{ex}")
@@ -94,6 +116,7 @@ def gas_to_bq(dataset: Dataset):
     job.result()  # Wait for the loading job to complete
 
     return {"message": "Data successfully inserted into BigQuery"}
+
 
 @app.post("/gas_to_bq_flatten")
 def gas_to_bq(dataset: Dataset):
